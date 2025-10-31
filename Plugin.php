@@ -29,23 +29,23 @@ class BingIndexNow_Plugin implements Typecho_Plugin_Interface
         $apiKey = new Typecho_Widget_Helper_Form_Element_Text(
             'apiKey', null, '',
             _t('IndexNow Key（必填）'),
-            '在 https://www.bing.com/indexnow/getstarted 获取的 32 位以上密钥。'
+            '在 https://www.bing.com/indexnow/getstarted 获取的 32 位以上密钥(例:c1665249f7874a529f4b16053f5c1665)。'
         );
         $apiKey->addRule('required', _t('请填写 API Key'));
         $form->addInput($apiKey);
 
         $host = new Typecho_Widget_Helper_Form_Element_Text(
             'host', null, '',
-            _t('站点主机名（不含协议）'),
-            '例如：www.example.com'
+            _t('站点主机名（不含协议：https:// 或 http://）'),
+            '例如：www.onemuggle.com'
         );
         $host->addRule('required', _t('请填写站点主机名'));
         $form->addInput($host);
 
         $keyLocation = new Typecho_Widget_Helper_Form_Element_Text(
             'keyLocation', null, '',
-            _t('Key URL（可选）'),
-            '如果 Key 文件不在 .well-known 目录，请填写完整 URL，例如：https://www.example.com/yourkey.txt'
+            _t('Key URL（需要在站点根目录上传txt文本）'),
+            '1.在站点根目录上传txt文本。 2.在浏览器上通过 (域名 + key + .txt) 能够访问到该文本。例如：https://ww.onemuggle.com/c1665249f7874a529f4b16053f5c1665.txt'
         );
         $form->addInput($keyLocation);
 
