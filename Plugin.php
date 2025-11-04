@@ -17,7 +17,7 @@ class BingIndexNow_Plugin implements Typecho_Plugin_Interface
         Typecho_Plugin::factory('Widget_Contents_Post_Edit')->finishPublish = array('BingIndexNow_Plugin', 'submitToBingIndex');
 
         // 注册前端 header 钩子用于伪 cron（每日运行 sitemap 提交）
-        Typecho_Plugin::factory('Widget_Archive')->header = array('BingIndexNow_Plugin', 'maybeRunSitemapCron');
+        // Typecho_Plugin::factory('Widget_Archive')->header = array('BingIndexNow_Plugin', 'maybeRunSitemapCron');
 
         return _t('Bing IndexNow 已启用，请在插件设置中填写 API Key 和 Host。');
     }
