@@ -4,7 +4,7 @@
  *
  * @package BingIndexNow
  * @author OneMuggle
- * @version 1.3.0
+ * @version 1.3.1
  * @link https://github.com/ID521101/BingIndexNow
  */
 
@@ -15,11 +15,7 @@ class BingIndexNow_Plugin implements Typecho_Plugin_Interface
     public static function activate()
     {
         Typecho_Plugin::factory('Widget_Contents_Post_Edit')->finishPublish = array('BingIndexNow_Plugin', 'submitToBingIndex');
-
-        // 注册前端 header 钩子用于伪 cron（每日运行 sitemap 提交）
-        // Typecho_Plugin::factory('Widget_Archive')->header = array('BingIndexNow_Plugin', 'maybeRunSitemapCron');
-
-        return _t('Bing IndexNow 已启用，请在插件设置中填写 API Key 和 Host。');
+        return _t('Bing IndexNow 已启用，请务必在插件设置中填写 Key 并点击保存。');
     }
 
     public static function deactivate()
@@ -53,6 +49,7 @@ class BingIndexNow_Plugin implements Typecho_Plugin_Interface
         );
         $form->addInput($keyLocation);
 
+        // 日志开关
         $saveLog = new Typecho_Widget_Helper_Form_Element_Radio(
             'saveLog', array('1' => _t('是'), '0' => _t('否')), '1', _t('是否保存日志'), _t('将操作日志写入插件目录下的文件'));
         $form->addInput($saveLog);
@@ -65,7 +62,7 @@ class BingIndexNow_Plugin implements Typecho_Plugin_Interface
         );
         $form->addInput($sitemapUrl);
 
-        // 手动提交按钮（在插件设置页触发）
+        // 手动提交按钮
         echo '<h4>站点地图即时推送</h4>';
         echo '<form method="post" style="margin-bottom:10px">';
         echo '<input type="submit" class="btn primary" name="submit_sitemap_now" value="立即提交Sitemap到IndexNow" />';
@@ -73,10 +70,11 @@ class BingIndexNow_Plugin implements Typecho_Plugin_Interface
         echo '</form>';
 
         if (!empty($_POST['submit_sitemap_now'])) {
-            // 处理手动提交（只在管理员访问插件配置页面时执行）
             $options = Typecho_Widget::widget('Widget_Options');
+            // 注意：文件夹名必须完全匹配 BingIndexNow
             $pluginOpts = $options->plugin('BingIndexNow');
             $sitemap = isset($pluginOpts->sitemap_url) ? trim($pluginOpts->sitemap_url) : '';
+            
             echo '<pre style="background:#f8f8f8;border:1px solid #eee;padding:10px;">';
             echo "开始手动提交 Sitemap：" . htmlspecialchars($sitemap) . "\n";
             $result = self::handleManualSitemapSubmit($sitemap);
@@ -89,7 +87,7 @@ class BingIndexNow_Plugin implements Typecho_Plugin_Interface
 
     public static function personalConfig(Typecho_Widget_Helper_Form $form) {}
 
-    /* -------------------- 提交核心逻辑（保留原功能） -------------------- */
+    /* -------------------- 提交核心逻辑 -------------------- */
     public static function submitToBingIndex($contents, $widget)
     {
         // 仅当发布时触发
@@ -104,14 +102,19 @@ class BingIndexNow_Plugin implements Typecho_Plugin_Interface
             return;
         }
 
-        $options     = Typecho_Widget::widget('Widget_Options');
-        $pluginOpts  = $options->plugin('BingIndexNow');
+        $options = Typecho_Widget::widget('Widget_Options');
+        // 确保获取的是本插件的配置
+        $pluginOpts = $options->plugin('BingIndexNow');
+
         $apiKey      = isset($pluginOpts->apiKey) ? $pluginOpts->apiKey : '';
         $host        = isset($pluginOpts->host) ? $pluginOpts->host : '';
         $keyLocation = isset($pluginOpts->keyLocation) ? $pluginOpts->keyLocation : '';
+        
+        // 获取日志开关：如果未设置，默认为 0 (不保存)
+        // 使用 == 比较，兼容 string '1' 和 int 1
+        $shouldLog = (isset($pluginOpts->saveLog) && $pluginOpts->saveLog == '1');
 
         $user = Typecho_Widget::widget('Widget_User');
-        $ip   = isset($_SERVER['REMOTE_ADDR']) ? $_SERVER['REMOTE_ADDR'] : 'unknown';
 
         $postId = self::extractPostId($contents, $widget);
         $url    = '';
@@ -119,8 +122,11 @@ class BingIndexNow_Plugin implements Typecho_Plugin_Interface
         elseif (is_object($contents) && isset($contents->permalink)) $url = $contents->permalink;
         elseif (is_object($widget) && isset($widget->permalink)) $url = $widget->permalink;
 
+        // 检查参数
         if (empty($apiKey) || empty($host) || empty($url)) {
-            self::logToFile($postId, 0, '缺少 API Key 或 Host 或 URL', $user->uid, $ip);
+            if ($shouldLog) {
+                self::logToFile($postId, 0, '错误：缺少 API Key 或 Host 或 URL', $user->uid);
+            }
             return;
         }
 
@@ -152,7 +158,10 @@ class BingIndexNow_Plugin implements Typecho_Plugin_Interface
             $msg = "HTTP $httpCode – $response";
         }
 
-        self::logToFile($postId, $httpCode, $msg, $user->uid, $ip);
+        // 只有当开关明确为 1 时才执行
+        if ($shouldLog) {
+            self::logToFile($postId, $httpCode, $msg, $user->uid);
+        }
     }
 
     private static function extractPostId($contents, $widget)
@@ -168,93 +177,79 @@ class BingIndexNow_Plugin implements Typecho_Plugin_Interface
             if (isset($widget->cid)) return (int)$widget->cid;
             if (isset($widget->id))  return (int)$widget->id;
         }
-
         return 0;
     }
 
     /* -------------------- 文件日志功能 -------------------- */
-    private static function logToFile($postId, $code, $message, $userId = 0, $userIp = '')
+    private static function logToFile($postId, $code, $message, $userId = 0)
     {
         $dir  = dirname(__FILE__);
         $file = $dir . '/indexnow_log.txt';
 
-        $time = date('Y-m-d H:i:s');
-        $log  = "[$time] PostID: {$postId}, User: {$userId}, IP: {$userIp}, HTTP: {$code}\n";
+        // 【修改点】强制使用 Asia/Shanghai 时区
+        try {
+            $dt = new DateTime('now', new DateTimeZone('Asia/Shanghai'));
+            $time = $dt->format('Y-m-d H:i:s');
+        } catch (Exception $e) {
+            $time = date('Y-m-d H:i:s'); // 如果环境不支持，回退到默认
+        }
+
+        $log  = "[$time] PostID: {$postId}, User: {$userId}, HTTP: {$code}\n";
         $log .= "Message: {$message}\n";
         $log .= str_repeat('-', 80) . "\n";
 
         file_put_contents($file, $log, FILE_APPEND | LOCK_EX);
     }
 
-    /* -------------------- Sitemap 自动与手动提交功能（独立于原功能） -------------------- */
+    /* -------------------- Sitemap 自动与手动提交功能 -------------------- */
 
-    // 在前端 header 钩子触发，使用文件方式记录上次运行时间以实现伪 cron（每日一次）
-    public static function maybeRunSitemapCron()
-    {
-        $dir = dirname(__FILE__);
-        $lockFile = $dir . '/indexnow_sitemap_last_run.txt';
-
-        // 如果文件不存在或最后运行时间超过 24 小时，则执行
-        $needRun = true;
-        if (file_exists($lockFile)) {
-            $last = (int)trim(file_get_contents($lockFile));
-            if ($last + 86400 > time()) {
-                $needRun = false;
-            }
-        }
-
-        if ($needRun) {
-            // 读取配置
-            $options = Typecho_Widget::widget('Widget_Options');
-            $pluginOpts = $options->plugin('BingIndexNow');
-            $sitemap = isset($pluginOpts->sitemap_url) ? trim($pluginOpts->sitemap_url) : '';
-            if (!empty($sitemap)) {
-                self::runSitemapSubmit($sitemap);
-                // 更新最后运行时间
-                file_put_contents($lockFile, (string)time(), LOCK_EX);
-            }
-        }
-    }
-
-    // 处理手动提交调用（返回字符串结果）
     public static function handleManualSitemapSubmit($sitemap)
     {
         if (empty($sitemap)) {
             return 'Sitemap 地址为空，请在插件设置中填写。';
         }
-
         return self::runSitemapSubmit($sitemap);
     }
 
-    // 运行 sitemap 提交主流程（返回字符串）
     public static function runSitemapSubmit($sitemap)
     {
         $dir = dirname(__FILE__);
         $logFile = $dir . '/indexnow_sitemap_log.txt';
-        $time = date('Y-m-d H:i:s');
+        
+        // 【修改点】强制使用 Asia/Shanghai 时区
+        try {
+            $dt = new DateTime('now', new DateTimeZone('Asia/Shanghai'));
+            $time = $dt->format('Y-m-d H:i:s');
+        } catch (Exception $e) {
+            $time = date('Y-m-d H:i:s');
+        }
 
         $options = Typecho_Widget::widget('Widget_Options');
         $pluginOpts = $options->plugin('BingIndexNow');
+        
         $apiKey = isset($pluginOpts->apiKey) ? trim($pluginOpts->apiKey) : '';
         $host = isset($pluginOpts->host) ? trim($pluginOpts->host) : '';
         $keyLocation = isset($pluginOpts->keyLocation) ? trim($pluginOpts->keyLocation) : '';
+        
+        // 获取日志开关状态，严格检查
+        $shouldLog = (isset($pluginOpts->saveLog) && $pluginOpts->saveLog == '1');
 
         if (empty($apiKey) || empty($host)) {
             $msg = "[$time] 错误：缺少 API Key 或 Host 配置。" . PHP_EOL . str_repeat('-', 80) . PHP_EOL;
-            file_put_contents($logFile, $msg, FILE_APPEND | LOCK_EX);
+            if ($shouldLog) {
+                file_put_contents($logFile, $msg, FILE_APPEND | LOCK_EX);
+            }
             return $msg;
         }
 
-        // 获取所有 URL
         $urls = self::fetchUrlsFromSitemap($sitemap);
         if (empty($urls)) {
             $msg = "[$time] 错误：未从 Sitemap 中获取到任何 URL。" . PHP_EOL . str_repeat('-', 80) . PHP_EOL;
-            file_put_contents($logFile, $msg, FILE_APPEND | LOCK_EX);
+            if ($shouldLog) {
+                file_put_contents($logFile, $msg, FILE_APPEND | LOCK_EX);
+            }
             return $msg;
         }
-
-        // 限制单次提交大小（可根据需要调整或移除）
-        // $urls = array_slice($urls, 0, 1000);
 
         $postDataArr = array(
             'host' => $host,
@@ -284,12 +279,15 @@ class BingIndexNow_Plugin implements Typecho_Plugin_Interface
         }
 
         $logMsg .= str_repeat('-', 80) . PHP_EOL;
-        file_put_contents($logFile, $logMsg, FILE_APPEND | LOCK_EX);
+        
+        // 只有当开关明确为 1 时才写入
+        if ($shouldLog) {
+            file_put_contents($logFile, $logMsg, FILE_APPEND | LOCK_EX);
+        }
 
         return $logMsg;
     }
 
-    // 解析 sitemap，支持 sitemap index 和常规 sitemap
     public static function fetchUrlsFromSitemap($sitemapUrl)
     {
         $urls = array();
@@ -302,7 +300,6 @@ class BingIndexNow_Plugin implements Typecho_Plugin_Interface
 
         $rootName = strtolower($xml->getName());
         if ($rootName === 'sitemapindex') {
-            // sitemap index 包含多个 sitemap 文件
             foreach ($xml->sitemap as $s) {
                 $loc = trim((string)$s->loc);
                 if (!empty($loc)) {
@@ -316,13 +313,10 @@ class BingIndexNow_Plugin implements Typecho_Plugin_Interface
                 if (!empty($loc)) $urls[] = $loc;
             }
         }
-
-        // 去重并返回
         $urls = array_values(array_unique($urls));
         return $urls;
     }
 
-    // 简单的远程抓取（支持 curl）
     private static function fetchRemoteContent($url)
     {
         $ch = curl_init();
@@ -336,5 +330,4 @@ class BingIndexNow_Plugin implements Typecho_Plugin_Interface
         if ($err) return '';
         return $res;
     }
-
 }
